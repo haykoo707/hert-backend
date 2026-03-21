@@ -9,48 +9,60 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*"
-  }
+  cors: { origin: "*" }
 });
 
 let queue = [];
+let currentWorker = null; // 🔥 ով ունի իրավունք հիմա
 
 io.on("connection", (socket) => {
   console.log("User connected");
 
-  // ուղարկում ենք queue-ը նոր user-ին
+  // սկզբում ուղարկում ենք ամեն ինչ
   socket.emit("queue", queue);
+  socket.emit("currentWorker", currentWorker);
 
-  // JOIN QUEUE
+  // JOIN
   socket.on("joinQueue", (name) => {
     if (!name) return;
 
     if (!queue.includes(name)) {
       queue.push(name);
-      io.emit("queue", queue);
     }
+
+    // եթե ոչ ոք չկա → առաջինը դառնում է currentWorker
+    if (!currentWorker && queue.length > 0) {
+      currentWorker = queue[0];
+    }
+
+    io.emit("queue", queue);
+    io.emit("currentWorker", currentWorker);
   });
 
-  // NEXT ORDER (ONLY FIRST USER)
+  // NEXT ORDER
   socket.on("nextOrder", (name) => {
     if (!name) return;
 
-    if (queue.length === 0) {
+    if (!currentWorker) {
       socket.emit("errorMsg", "Հերթ չկա");
       return;
     }
 
-    // 🔥 check → միայն առաջինն է կարող
-    if (queue[0] !== name) {
+    // 🔒 միայն currentWorker-ը կարող է
+    if (name !== currentWorker) {
       socket.emit("errorMsg", "Քո հերթը չէ ❌");
       return;
     }
 
-    const worker = queue.shift();
+    // հանում ենք իրեն queue-ից
+    queue.shift();
+
+    // նոր currentWorker
+    currentWorker = queue.length > 0 ? queue[0] : null;
 
     io.emit("queue", queue);
-    io.emit("order", worker);
+    io.emit("currentWorker", currentWorker);
+    io.emit("order", name);
   });
 
   socket.on("disconnect", () => {
@@ -58,7 +70,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// Render / hosting support
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
