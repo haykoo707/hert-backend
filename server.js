@@ -12,17 +12,23 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "admin123";
+
 let queue = [];
-let currentWorker = null; // 🔥 ով ունի իրավունք հիմա
+let currentWorker = null;
+
+// { workerName: { joinTime: ISO string, nextTime: ISO string } }
+let timingData = {};
 
 io.on("connection", (socket) => {
   console.log("User connected");
 
-  // սկզբում ուղարկում ենք ամեն ինչ
   socket.emit("queue", queue);
   socket.emit("currentWorker", currentWorker);
+  socket.emit("timingData", timingData);
 
-  // JOIN
+  // ─── JOIN ───
   socket.on("joinQueue", (name) => {
     if (!name) return;
 
@@ -30,16 +36,20 @@ io.on("connection", (socket) => {
       queue.push(name);
     }
 
-    // եթե ոչ ոք չկա → առաջինը դառնում է currentWorker
+    // record join time
+    if (!timingData[name]) timingData[name] = {};
+    timingData[name].joinTime = new Date().toISOString();
+
     if (!currentWorker && queue.length > 0) {
       currentWorker = queue[0];
     }
 
     io.emit("queue", queue);
     io.emit("currentWorker", currentWorker);
+    io.emit("timingData", timingData);
   });
 
-  // NEXT ORDER
+  // ─── NEXT ORDER ───
   socket.on("nextOrder", (name) => {
     if (!name) return;
 
@@ -48,21 +58,56 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // 🔒 միայն currentWorker-ը կարող է
     if (name !== currentWorker) {
       socket.emit("errorMsg", "Քո հերթը չէ ❌");
       return;
     }
 
-    // հանում ենք իրեն queue-ից
-    queue.shift();
+    // record next time
+    if (!timingData[name]) timingData[name] = {};
+    timingData[name].nextTime = new Date().toISOString();
 
-    // նոր currentWorker
+    queue.shift();
     currentWorker = queue.length > 0 ? queue[0] : null;
 
     io.emit("queue", queue);
     io.emit("currentWorker", currentWorker);
+    io.emit("timingData", timingData);
     io.emit("order", name);
+  });
+
+  // ─── ADMIN REMOVE ───
+  socket.on("adminRemove", ({ worker, adminUser, adminPass }) => {
+    if (adminUser !== ADMIN_USER || adminPass !== ADMIN_PASS) {
+      socket.emit("errorMsg", "Ադմինի մուտքն անհաջող ❌");
+      return;
+    }
+
+    if (!worker || !queue.includes(worker)) {
+      socket.emit("errorMsg", "Աշխատողը հերթում չէ");
+      return;
+    }
+
+    const wasFirst = queue[0] === worker;
+    queue = queue.filter(n => n !== worker);
+
+    if (wasFirst) {
+      currentWorker = queue.length > 0 ? queue[0] : null;
+    }
+
+    console.log(`Admin removed: ${worker}`);
+
+    io.emit("queue", queue);
+    io.emit("currentWorker", currentWorker);
+  });
+
+  // ─── ADMIN: GET TIMING DATA ───
+  socket.on("adminGetTiming", ({ adminUser, adminPass }) => {
+    if (adminUser !== ADMIN_USER || adminPass !== ADMIN_PASS) {
+      socket.emit("errorMsg", "Ադմինի մուտքն անհաջող ❌");
+      return;
+    }
+    socket.emit("timingData", timingData);
   });
 
   socket.on("disconnect", () => {
